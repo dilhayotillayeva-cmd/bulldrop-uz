@@ -33,4 +33,4 @@ Bot foydalanuvchining **har bir menyu tugmasi va callback** oldidan majburiy obu
 `/admin` faqat `ADMIN_IDS` ichidagi Telegram ID'larga ishlaydi.
 
 ## Quti rasmi
-`assets/quti_tanla.png` qutilar menyusi ochilganda 25 ta interaktiv quti tugmalarining ustida ko‘rsatiladi.
+`quti_tanla.png` qutilar menyusi ochilganda 25 ta interaktiv quti tugmalarining ustida ko‘rsatiladi.

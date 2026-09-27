@@ -21,7 +21,7 @@ from aiogram.exceptions import TelegramBadRequest
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 DB_PATH = os.getenv("DB_PATH", "bulldrop.sqlite3")
-BOX_IMAGE = Path("assets/quti_tanla.png")
+BOX_IMAGE = Path("quti_tanla.png")
 
 logging.basicConfig(level=logging.INFO)
 
