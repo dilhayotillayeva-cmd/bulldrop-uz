@@ -17,6 +17,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton
 )
 from aiogram.exceptions import TelegramBadRequest
+from aiohttp import web
 
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
@@ -629,10 +630,29 @@ async def pending_handler(message: Message):
     finally:
         pending.pop(message.from_user.id, None)
 
+async def health(request):
+    return web.Response(text="BULLDROP BOT OK")
+
+async def start_web_server():
+    port = int(os.getenv("PORT", "10000"))
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info("Health server listening on port %s", port)
+    return runner
+
 async def main():
     init_db()
+    runner = await start_web_server()
     logging.info("BULLDROP bot started")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await runner.cleanup()
 
 if __name__ == "__main__":
     asyncio.run(main())
