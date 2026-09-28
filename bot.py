@@ -100,7 +100,7 @@ async def require_subscription(obj):
     return False
 
 def main_menu(l):
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=T(l,'🎁 QUTILAR','🎁 КОРОБКИ')),KeyboardButton(text=T(l,'👤 PROFIL','👤 ПРОФИЛЬ'))],[KeyboardButton(text=T(l,'🏆 TOP','🏆 ТОП')),KeyboardButton(text=T(l,'👥 REFERAL','👥 РЕФЕРАЛ'))],[KeyboardButton(text=T(l,'🎯 VAZIFALAR','🎯 ЗАДАНИЯ'))]],resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=T(l,'🎁 QUTILAR','🎁 КОРОБКИ')),KeyboardButton(text=T(l,'👤 PROFIL','👤 ПРОФИЛЬ'))],[KeyboardButton(text=T(l,'🏆 TOP','🏆 ТОП')),KeyboardButton(text=T(l,'👥 REFERAL','👥 РЕФЕРАЛ'))],[KeyboardButton(text=T(l,'🎯 VAZIFALAR','🎯 ЗАДАНИЯ'))],[KeyboardButton(text=T(l,"🌐 TILNI O'ZGARTIRISH",'🌐 СМЕНИТЬ ЯЗЫК'))]],resize_keyboard=True)
 
 def admin_menu(l):
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=T(l,'📄 Promokodlar','📄 Промокоды'),callback_data='adm_promos'),InlineKeyboardButton(text=T(l,'📊 Statistika','📊 Статистика'),callback_data='adm_stats')],[InlineKeyboardButton(text=T(l,'📢 Habar yuborish','📢 Рассылка'),callback_data='adm_broadcast'),InlineKeyboardButton(text=T(l,'🎁 Quti promokod','🎁 Награды коробок'),callback_data='adm_rewards')],[InlineKeyboardButton(text=T(l,'📢 Majburiy kanallar','📢 Обязательные каналы'),callback_data='adm_channels')],[InlineKeyboardButton(text=T(l,'🎯 Vazifalar','🎯 Задания'),callback_data='adm_tasks')],[InlineKeyboardButton(text=T(l,'🚪 Chiqish','🚪 Выйти'),callback_data='adm_exit')]])
@@ -134,7 +134,12 @@ async def choose_lang(c:CallbackQuery):
     if l not in ('uz','ru'): return
     set_lang(c.from_user.id,l); ensure_user(c); await c.answer('🇺🇿' if l=='uz' else '🇷🇺')
     if not await require_subscription(c): return
-    await c.message.answer(T(l,'🔥 <b>BULLDROP</b> ga xush kelibsiz!\n\n🪙 Referal orqali tanga yig‘ing.\n🎁 5 ta tanga bilan quti oching.','🔥 Добро пожаловать в <b>BULLDROP</b>!\n\n🪙 Получайте монеты через рефералов.\n🎁 Открывайте коробку за 5 монет.'),reply_markup=main_menu(l))
+    await c.message.answer(T(l,'🌐 Til O‘zbekchaga o‘zgartirildi.','🌐 Язык изменён на русский.') if l=='uz' else '🌐 Язык изменён на русский.',reply_markup=main_menu(l))
+
+@dp.message(F.text.in_({'🌐 TILNI O\'ZGARTIRISH','🌐 СМЕНИТЬ ЯЗЫК'}))
+async def change_language(m:Message):
+    if not await require_subscription(m): return
+    await m.answer('🌐 Tilni tanlang / Выберите язык:',reply_markup=language_kb())
 
 async def open_boxes(m):
     if not await require_subscription(m): return
