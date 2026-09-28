@@ -1,17 +1,14 @@
 services:
-  - type: worker
+  - type: web
     name: bulldrop-bot
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
+    healthCheckPath: /health
     envVars:
       - key: BOT_TOKEN
         sync: false
       - key: ADMIN_IDS
         sync: false
       - key: DB_PATH
-        value: /var/data/bulldrop.sqlite3
-    disk:
-      name: bulldrop-data
-      mountPath: /var/data
-      sizeGB: 1
+        value: bulldrop.sqlite3
