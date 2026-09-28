@@ -17,7 +17,6 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton
 )
 from aiogram.exceptions import TelegramBadRequest
-from aiohttp import web
 
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS = {int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
@@ -116,6 +115,24 @@ def init_db():
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     )""")
+    db("""CREATE TABLE IF NOT EXISTS tasks(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        task_type TEXT NOT NULL DEFAULT 'link',
+        target TEXT NOT NULL,
+        reward_coins INTEGER NOT NULL DEFAULT 1,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+    )""")
+    db("""CREATE TABLE IF NOT EXISTS task_completions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        completed_at TEXT NOT NULL,
+        UNIQUE(task_id, user_id),
+        FOREIGN KEY(task_id) REFERENCES tasks(id),
+        FOREIGN KEY(user_id) REFERENCES users(user_id)
+    )""")
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -189,6 +206,7 @@ def main_menu():
         keyboard=[
             [KeyboardButton(text="🎁 QUTILAR"), KeyboardButton(text="👤 PROFIL")],
             [KeyboardButton(text="🏆 TOP"), KeyboardButton(text="👥 REFERAL")],
+            [KeyboardButton(text="🎯 VAZIFALAR")],
         ],
         resize_keyboard=True
     )
@@ -200,6 +218,7 @@ def admin_menu():
         [InlineKeyboardButton(text="📢 Habar yuborish", callback_data="adm_broadcast"),
          InlineKeyboardButton(text="🎁 Quti promokod", callback_data="adm_rewards")],
         [InlineKeyboardButton(text="📢 Majburiy kanallar", callback_data="adm_channels")],
+        [InlineKeyboardButton(text="🎯 Vazifalar", callback_data="adm_tasks")],
         [InlineKeyboardButton(text="🚪 Chiqish", callback_data="adm_exit")]
     ])
 
@@ -329,6 +348,161 @@ async def referral(message: Message):
         f"🔗 Sizning havolangiz:\n<code>{link}</code>",
         reply_markup=main_menu()
     )
+
+def task_type_label(task_type):
+    return "📢 Kanalga obuna" if task_type == "channel" else "🔗 Link orqali vazifa"
+
+def tasks_keyboard(rows):
+    kb = []
+    for t in rows:
+        kb.append([InlineKeyboardButton(
+            text=f"🎯 {t['title']} • +{t['reward_coins']} 🪙",
+            callback_data=f"task:{t['id']}"
+        )])
+    kb.append([InlineKeyboardButton(text="⬅️ Menyu", callback_data="user_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+@dp.message(F.text == "🎯 VAZIFALAR")
+async def menu_tasks(message: Message):
+    if not await require_subscription(message):
+        return
+    ensure_user(message)
+    rows = db("""SELECT t.*, CASE WHEN tc.id IS NULL THEN 0 ELSE 1 END AS done
+                 FROM tasks t LEFT JOIN task_completions tc
+                 ON tc.task_id=t.id AND tc.user_id=?
+                 WHERE t.active=1 ORDER BY t.id DESC""", (message.from_user.id,), True)
+    if not rows:
+        await message.answer(
+            "🎯 <b>VAZIFALAR</b>\n\nHozircha vazifalar mavjud emas.",
+            reply_markup=main_menu()
+        )
+        return
+    text = "🎯 <b>VAZIFALAR</b>\n\nVazifani bajaring va tanga oling!\n"
+    available = []
+    for t in rows:
+        if t['done']:
+            text += f"✅ {t['title']} — allaqachon olingan <b>+{t['reward_coins']} 🪙</b>\n"
+        else:
+            text += f"🔹 {t['title']} — <b>+{t['reward_coins']} 🪙</b>\n"
+            available.append(t)
+    if available:
+        text += "\nKerakli vazifani tanlang:"
+        await message.answer(text, reply_markup=tasks_keyboard(available))
+    else:
+        await message.answer(text + "\n🎉 Barcha vazifalarni bajargansiz!", reply_markup=main_menu())
+
+@dp.callback_query(F.data.startswith("task:"))
+async def task_open(call: CallbackQuery):
+    if not await require_subscription(call):
+        return
+    try:
+        tid = int(call.data.split(":", 1)[1])
+    except Exception:
+        await call.answer("Xatolik.", show_alert=True)
+        return
+    rows = db("""SELECT t.*, tc.id AS completion_id
+                 FROM tasks t LEFT JOIN task_completions tc
+                 ON tc.task_id=t.id AND tc.user_id=?
+                 WHERE t.id=? AND t.active=1""", (call.from_user.id, tid), True)
+    if not rows:
+        await call.answer("Vazifa topilmadi yoki o‘chirilgan.", show_alert=True)
+        return
+    t = rows[0]
+    if t['completion_id']:
+        await call.answer("Bu vazifadan tanga allaqachon olingan.", show_alert=True)
+        return
+    if t['task_type'] == 'channel':
+        try:
+            member = await bot.get_chat_member(t['target'], call.from_user.id)
+            if member.status in ("left", "kicked"):
+                await call.answer("Avval kanalga obuna bo‘ling.", show_alert=True)
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📢 Kanalga kirish", url=(f"https://t.me/{str(t['target']).lstrip('@')}" if str(t['target']).startswith('@') else "https://t.me"))],
+                    [InlineKeyboardButton(text="✅ Tekshirish", callback_data=f"task:{tid}")]
+                ])
+                await call.message.answer(
+                    f"🎯 <b>{t['title']}</b>\n\nKanalga obuna bo‘ling, so‘ng «✅ Tekshirish»ni bosing.\n\n🪙 Mukofot: <b>+{t['reward_coins']} tanga</b>",
+                    reply_markup=kb
+                )
+                return
+        except Exception:
+            await call.answer("Kanal obunasini tekshirib bo‘lmadi. Keyinroq urinib ko‘ring.", show_alert=True)
+            return
+    else:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 Vazifani bajarish", url=t['target'])],
+            [InlineKeyboardButton(text="✅ Bajarildi", callback_data=f"task_done:{tid}")],
+            [InlineKeyboardButton(text="⬅️ Vazifalar", callback_data="tasks_menu")]
+        ])
+        await call.message.answer(
+            f"🎯 <b>{t['title']}</b>\n\nVazifani bajaring va «✅ Bajarildi»ni bosing.\n\n🪙 Mukofot: <b>+{t['reward_coins']} tanga</b>\n\n⚠️ Link orqali vazifalarda bot tashqi sayt/ilovadagi amalni texnik tasdiqlay olmaydi.",
+            reply_markup=kb
+        )
+        await call.answer()
+        return
+    await task_complete(call, tid)
+
+@dp.callback_query(F.data.startswith("task_done:"))
+async def task_done(call: CallbackQuery):
+    if not await require_subscription(call):
+        return
+    try:
+        tid = int(call.data.split(":", 1)[1])
+    except Exception:
+        await call.answer("Xatolik.", show_alert=True)
+        return
+    rows = db("SELECT * FROM tasks WHERE id=? AND active=1", (tid,), True)
+    if not rows:
+        await call.answer("Vazifa topilmadi.", show_alert=True)
+        return
+    t = rows[0]
+    if t['task_type'] == 'channel':
+        try:
+            member = await bot.get_chat_member(t['target'], call.from_user.id)
+            if member.status in ("left", "kicked"):
+                await call.answer("❌ Avval kanalga obuna bo‘ling.", show_alert=True)
+                return
+        except Exception:
+            await call.answer("Kanalni tekshirishda xatolik.", show_alert=True)
+            return
+    await task_complete(call, tid)
+
+async def task_complete(call: CallbackQuery, tid: int):
+    rows = db("SELECT * FROM tasks WHERE id=? AND active=1", (tid,), True)
+    if not rows:
+        await call.answer("Vazifa topilmadi.", show_alert=True)
+        return
+    t = rows[0]
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO task_completions(task_id,user_id,completed_at) VALUES(?,?,?)",
+                (tid, call.from_user.id, now())
+            )
+            conn.execute("UPDATE users SET coins=coins+? WHERE user_id=?", (t['reward_coins'], call.from_user.id))
+    except sqlite3.IntegrityError:
+        await call.answer("Bu vazifadan tanga allaqachon olingan.", show_alert=True)
+        return
+    await call.answer(f"🎉 +{t['reward_coins']} tanga!", show_alert=True)
+    await call.message.answer(
+        f"✅ <b>VAZIFA BAJARILDI!</b>\n\n{t['title']}\n🪙 Mukofot: <b>+{t['reward_coins']} tanga</b>",
+        reply_markup=main_menu()
+    )
+
+@dp.callback_query(F.data == "tasks_menu")
+async def tasks_menu_callback(call: CallbackQuery):
+    if not await require_subscription(call):
+        return
+    rows = db("""SELECT t.*, CASE WHEN tc.id IS NULL THEN 0 ELSE 1 END AS done
+                 FROM tasks t LEFT JOIN task_completions tc
+                 ON tc.task_id=t.id AND tc.user_id=?
+                 WHERE t.active=1 ORDER BY t.id DESC""", (call.from_user.id,), True)
+    available = [t for t in rows if not t['done']]
+    await call.answer()
+    if not available:
+        await call.message.answer("🎯 <b>VAZIFALAR</b>\n\n🎉 Barcha vazifalarni bajargansiz!", reply_markup=main_menu())
+    else:
+        await call.message.answer("🎯 <b>VAZIFALAR</b>\n\nVazifani tanlang:", reply_markup=tasks_keyboard(available))
 
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(call: CallbackQuery):
@@ -474,6 +648,82 @@ async def adm_ch_del(call: CallbackQuery):
     await call.answer("✅ Kanal olib tashlandi.")
     await adm_channels(call)
 
+@dp.callback_query(F.data == "adm_tasks")
+async def adm_tasks(call: CallbackQuery):
+    if not admin_only(call): return
+    rows = db("SELECT * FROM tasks ORDER BY id DESC", fetch=True)
+    text = "🎯 <b>VAZIFALAR</b>\n\n"
+    if rows:
+        for t in rows:
+            count = db("SELECT COUNT(*) c FROM task_completions WHERE task_id=?", (t['id'],), True)[0]['c']
+            status = "🟢" if t['active'] else "🔴"
+            text += f"#{t['id']} {status} — {t['title']} — +{t['reward_coins']} 🪙 — 👥 {count}\n"
+    else:
+        text += "Hozircha vazifa yo‘q.\n"
+    kb = [
+        [InlineKeyboardButton(text="➕ Vazifa qo‘shish", callback_data="adm_task_add")],
+        [InlineKeyboardButton(text="➖ Vazifani olib tashlash", callback_data="adm_task_del")],
+        [InlineKeyboardButton(text="📊 Bajarilganlar statistikasi", callback_data="adm_task_stats")],
+        [InlineKeyboardButton(text="⬅️ Admin panel", callback_data="adm_home")]
+    ]
+    await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    await call.answer()
+
+@dp.callback_query(F.data == "adm_task_add")
+async def adm_task_add(call: CallbackQuery):
+    if not admin_only(call): return
+    pending[call.from_user.id] = {"action":"task_add"}
+    await call.message.answer(
+        "➕ <b>Vazifa qo‘shish</b>\n\n"
+        "Format: <code>Nomi | turi | link/chat_id | tanga</code>\n\n"
+        "📢 Kanal vazifasi: <code>channel</code>\n"
+        "Masalan: <code>Telegram kanaliga obuna bo‘ling | channel | @bulldrop_uz | 2</code>\n\n"
+        "🔗 Link/like/video vazifasi: <code>link</code>\n"
+        "Masalan: <code>YouTube videoga like bosing | link | https://youtube.com/... | 5</code>\n\n"
+        "⚠️ Link vazifasida bot tashqi saytdagi like/ko‘rish amalini avtomatik tekshira olmaydi; foydalanuvchi «Bajarildi» tugmasini bosadi. Kanal vazifasi esa Telegram orqali tekshiriladi.\n\n"
+        "Bekor qilish: /cancel"
+    )
+    await call.answer()
+
+@dp.callback_query(F.data == "adm_task_del")
+async def adm_task_del(call: CallbackQuery):
+    if not admin_only(call): return
+    rows = db("SELECT * FROM tasks WHERE active=1 ORDER BY id DESC", fetch=True)
+    if not rows:
+        await call.answer("O‘chirish uchun vazifa yo‘q.", show_alert=True)
+        return
+    kb = [[InlineKeyboardButton(text=f"❌ #{t['id']} {t['title']}", callback_data=f"adm_task_delid:{t['id']}")] for t in rows]
+    kb.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="adm_tasks")])
+    await call.message.edit_text("O‘chiriladigan vazifani tanlang:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("adm_task_delid:"))
+async def adm_task_delid(call: CallbackQuery):
+    if not admin_only(call): return
+    tid = int(call.data.split(":", 1)[1])
+    db("UPDATE tasks SET active=0 WHERE id=?", (tid,))
+    await call.answer("✅ Vazifa olib tashlandi.")
+    await adm_tasks(call)
+
+@dp.callback_query(F.data == "adm_task_stats")
+async def adm_task_stats(call: CallbackQuery):
+    if not admin_only(call): return
+    rows = db("""SELECT t.id,t.title,t.reward_coins,t.active,COUNT(tc.id) AS completed
+                 FROM tasks t LEFT JOIN task_completions tc ON tc.task_id=t.id
+                 GROUP BY t.id ORDER BY t.id DESC""", fetch=True)
+    total = db("SELECT COUNT(DISTINCT user_id) c FROM task_completions", fetch=True)[0]['c']
+    total_completions = db("SELECT COUNT(*) c FROM task_completions", fetch=True)[0]['c']
+    text = (f"📊 <b>VAZIFALAR STATISTIKASI</b>\n\n"
+            f"👥 Vazifa bajargan foydalanuvchilar: <b>{total}</b>\n"
+            f"✅ Jami bajarilgan vazifalar: <b>{total_completions}</b>\n\n")
+    if rows:
+        for r in rows:
+            text += f"#{r['id']} — {r['title']} — 👥 <b>{r['completed']}</b>\n"
+    else:
+        text += "Hozircha ma’lumot yo‘q."
+    await call.message.edit_text(text, reply_markup=back_admin())
+    await call.answer()
+
 @dp.callback_query(F.data == "adm_rewards")
 async def adm_rewards(call: CallbackQuery):
     if not admin_only(call): return
@@ -614,6 +864,28 @@ async def pending_handler(message: Message):
             db("INSERT INTO promo_codes(code,reward_coins,max_uses,created_at) VALUES(?,?,?,?)",
                (code.upper(), int(reward), int(limit), now()))
             await message.answer("✅ Promokod qo‘shildi.", reply_markup=admin_menu())
+        elif typ == "task_add":
+            parts = [x.strip() for x in message.text.split("|")]
+            if len(parts) != 4:
+                raise ValueError("Format: Nomi | turi | link/chat_id | tanga")
+            title, task_type, target, reward = parts
+            task_type = task_type.lower()
+            if task_type not in ("channel", "link"):
+                raise ValueError("turi faqat channel yoki link bo‘lishi kerak")
+            reward = int(reward)
+            if not title or not target or reward <= 0:
+                raise ValueError("Nomi, link/chat_id va tanga to‘g‘ri bo‘lishi kerak")
+            if task_type == "link" and not (target.startswith("http://") or target.startswith("https://")):
+                raise ValueError("link turi uchun http:// yoki https:// link kerak")
+            if task_type == "channel":
+                # Verify the bot can access the channel before adding the task.
+                await bot.get_chat(target)
+            db("INSERT INTO tasks(title,task_type,target,reward_coins,created_at) VALUES(?,?,?,?,?)",
+               (title, task_type, target, reward, now()))
+            await message.answer(
+                f"✅ <b>Vazifa qo‘shildi!</b>\n\n🎯 {title}\n🪙 Mukofot: <b>+{reward} tanga</b>",
+                reply_markup=admin_menu()
+            )
         elif typ == "broadcast":
             sent=0
             users=db("SELECT user_id FROM users", fetch=True)
@@ -630,29 +902,10 @@ async def pending_handler(message: Message):
     finally:
         pending.pop(message.from_user.id, None)
 
-async def health(request):
-    return web.Response(text="BULLDROP BOT OK")
-
-async def start_web_server():
-    port = int(os.getenv("PORT", "10000"))
-    app = web.Application()
-    app.router.add_get("/", health)
-    app.router.add_get("/health", health)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logging.info("Health server listening on port %s", port)
-    return runner
-
 async def main():
     init_db()
-    runner = await start_web_server()
     logging.info("BULLDROP bot started")
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await runner.cleanup()
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
